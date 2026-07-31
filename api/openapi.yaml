@@ -1,0 +1,457 @@
+# =============================================================================
+#  GENERATED FILE — DO NOT EDIT BY HAND
+#
+#  Source:    api/proto/veyronix/v1/*.proto
+#  Generator: buf generate  (protoc-gen-connect-openapi)
+#  Regenerate: make proto
+#
+#  Edits made here are lost on the next generation. Change the .proto instead.
+#  Streaming RPCs (StreamEvents, StreamLogs) are documented below for
+#  discoverability, but OpenAPI 3.1 cannot fully express server-streaming —
+#  use the Connect or gRPC client for those. See docs/adr/0004-grpc-vs-rest.md.
+# =============================================================================
+
+openapi: 3.1.0
+
+info:
+  title: Veyronix API
+  version: v1
+  summary: Provider-agnostic application delivery
+  description: |
+    One deployment workflow for every infrastructure provider.
+
+    All endpoints are Connect RPC procedures reachable over plain HTTP/JSON.
+    A procedure `Foo` on service `veyronix.v1.DeploymentService` is available at
+    `POST /veyronix.v1.DeploymentService/Foo` with a JSON body. Method is always
+    POST, including for reads — this is the Connect protocol, not REST.
+
+    **Idempotency.** `CreateDeployment` requires an idempotency key derived from
+    (project, environment, version). A repeated request with the same key returns
+    the existing deployment rather than creating a second one.
+
+    **Authorization.** Every procedure is deny-by-default. A subject with no
+    matching policy receives `permission_denied`. Use `Explain` on
+    `AuthzService` to understand a decision.
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  contact:
+    name: Veyronix
+    url: https://github.com/nickemma/veyronix
+
+servers:
+  - url: https://api.veyronix.io
+    description: Production
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - bearerAuth: []
+  - sessionCookie: []
+
+tags:
+  - name: Deployments
+    description: Create, inspect, cancel, and roll back deployments
+  - name: Projects
+    description: Projects, environments, and deployment targets
+  - name: Secrets
+    description: Encrypted credentials and environment variables
+  - name: Authorization
+    description: Policy inspection and decision explanation
+
+paths:
+
+  /veyronix.v1.DeploymentService/CreateDeployment:
+    post:
+      tags: [Deployments]
+      operationId: DeploymentService_CreateDeployment
+      summary: Create a deployment
+      description: |
+        Validates, authorizes, resolves the provider, then persists a job and an
+        outbox event in a single transaction and returns immediately. The
+        deployment executes asynchronously; subscribe to `StreamEvents` or poll
+        `GetDeployment` for progress.
+
+        Returns the existing deployment, unchanged, if `idempotency_key` has
+        already been seen for this project.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDeploymentRequest'
+      responses:
+        '200':
+          description: Deployment accepted and queued, or an existing deployment for this idempotency key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Deployment'
+        '400': { $ref: '#/components/responses/InvalidArgument' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Environment is frozen, or a conflicting deployment is in flight
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectError' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /veyronix.v1.DeploymentService/GetDeployment:
+    post:
+      tags: [Deployments]
+      operationId: DeploymentService_GetDeployment
+      summary: Fetch a single deployment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id:
+                  type: string
+                  examples: ['dpl_01HQ8XK3M9']
+      responses:
+        '200':
+          description: The deployment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Deployment' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /veyronix.v1.DeploymentService/ListDeployments:
+    post:
+      tags: [Deployments]
+      operationId: DeploymentService_ListDeployments
+      summary: List deployments for a project and environment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id:  { type: string }
+                environment: { type: string }
+                state:       { $ref: '#/components/schemas/DeploymentState' }
+                page_size:   { type: integer, default: 20, maximum: 100 }
+                page_token:  { type: string }
+      responses:
+        '200':
+          description: A page of deployments, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deployments:
+                    type: array
+                    items: { $ref: '#/components/schemas/Deployment' }
+                  next_page_token: { type: string }
+
+  /veyronix.v1.DeploymentService/CancelDeployment:
+    post:
+      tags: [Deployments]
+      operationId: DeploymentService_CancelDeployment
+      summary: Cancel an in-flight deployment
+      description: |
+        Cancels the context all the way to the provider call. A deployment that
+        has already reached a terminal state is returned unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id:     { type: string }
+                reason: { type: string }
+      responses:
+        '200':
+          description: The deployment, now cancelled or already terminal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Deployment' }
+
+  /veyronix.v1.DeploymentService/Rollback:
+    post:
+      tags: [Deployments]
+      operationId: DeploymentService_Rollback
+      summary: Roll back to a previous release
+      description: |
+        Defaults to the last successful release for the environment. Requires the
+        target provider to declare the `rollback` capability; otherwise returns
+        `failed_precondition`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id, environment]
+              properties:
+                project_id:  { type: string }
+                environment: { type: string }
+                to_release:  { type: string, description: 'Defaults to the previous successful release' }
+      responses:
+        '200':
+          description: Rollback deployment created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Deployment' }
+        '412':
+          description: Provider does not support rollback
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConnectError' }
+
+  /veyronix.v1.DeploymentService/StreamEvents:
+    post:
+      tags: [Deployments]
+      operationId: DeploymentService_StreamEvents
+      summary: Stream deployment state events (server-streaming)
+      description: |
+        Server-streaming RPC. Emits every state transition for a deployment.
+        Resume after a disconnect by passing the last `seq` observed.
+
+        Over the Connect protocol this is a streaming response body; OpenAPI
+        cannot fully describe it. Use a Connect or gRPC client.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deployment_id]
+              properties:
+                deployment_id: { type: string }
+                from_seq:      { type: integer, format: int64 }
+      responses:
+        '200':
+          description: A stream of deployment events
+          content:
+            application/connect+json:
+              schema: { $ref: '#/components/schemas/DeploymentEvent' }
+
+  /veyronix.v1.DeploymentService/StreamLogs:
+    post:
+      tags: [Deployments]
+      operationId: DeploymentService_StreamLogs
+      summary: Stream build and deploy logs (server-streaming)
+      description: |
+        Server-streaming RPC. Log lines are scrubbed against known secret values
+        before emission — see docs/THREAT_MODEL.md, threat B4.2.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deployment_id]
+              properties:
+                deployment_id: { type: string }
+                follow:        { type: boolean, default: true }
+                tail:          { type: integer, default: 100 }
+      responses:
+        '200':
+          description: A stream of log lines
+          content:
+            application/connect+json:
+              schema: { $ref: '#/components/schemas/LogLine' }
+
+  /veyronix.v1.AuthzService/Explain:
+    post:
+      tags: [Authorization]
+      operationId: AuthzService_Explain
+      summary: Explain an authorization decision
+      description: |
+        Returns the policy that matched (or the fact that none did) for a
+        subject, action, and resource. An authorization system nobody can debug
+        becomes an authorization system somebody disables.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject, action, resource]
+              properties:
+                subject:  { type: string, examples: ['alice@acme.io'] }
+                action:   { type: string, examples: ['deploy'] }
+                resource: { type: string, examples: ['project/ecommerce-api/production'] }
+      responses:
+        '200':
+          description: The decision and its reasoning
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  decision:        { type: string, enum: [ALLOW, DENY] }
+                  matched_policy:  { type: string }
+                  subject_role:    { type: string }
+                  attributes_evaluated:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        expression: { type: string }
+                        result:     { type: boolean }
+                  reason: { type: string }
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: API key or machine token, for CLI and CI clients
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: veyronix_session
+      description: Set by the OAuth callback; HttpOnly, SameSite=Strict
+
+  responses:
+    InvalidArgument:
+      description: Request failed validation
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ConnectError' }
+    Unauthenticated:
+      description: Missing or invalid credentials
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ConnectError' }
+    PermissionDenied:
+      description: Authenticated, but not permitted. Call AuthzService.Explain for the reason
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ConnectError' }
+    NotFound:
+      description: Resource does not exist, or the subject may not know that it does
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ConnectError' }
+    RateLimited:
+      description: Too many requests
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ConnectError' }
+
+  schemas:
+
+    DeploymentState:
+      type: string
+      description: |
+        Explicit lifecycle. Transitions are validated in domain code; illegal
+        transitions are rejected rather than silently permitted.
+      enum:
+        - DEPLOYMENT_STATE_UNSPECIFIED
+        - QUEUED
+        - CLAIMED
+        - BUILDING
+        - DEPLOYING
+        - VERIFYING
+        - SUCCEEDED
+        - ROLLING_BACK
+        - ROLLED_BACK
+        - FAILED
+        - CANCELLED
+
+    ErrorClass:
+      type: string
+      description: |
+        Classification drives SLI accounting. Only `platform_*` classes count
+        against the deployment-success objective; `user_*` and `provider_*` do not.
+      enum:
+        - user_build_failed
+        - user_healthcheck_failed
+        - provider_error
+        - provider_rate_limited
+        - target_not_found
+        - release_not_found
+        - secret_decryption_failed
+        - platform_worker_lost
+        - platform_timeout
+        - platform_internal
+
+    PhaseTimings:
+      type: object
+      description: Deployment duration decomposed by phase. A single total is not actionable.
+      properties:
+        queue_seconds:  { type: number, format: double }
+        build_seconds:  { type: number, format: double }
+        deploy_seconds: { type: number, format: double }
+        verify_seconds: { type: number, format: double }
+
+    CreateDeploymentRequest:
+      type: object
+      required: [project_id, environment, version, idempotency_key]
+      properties:
+        project_id:      { type: string }
+        environment:     { type: string, examples: ['production'] }
+        version:         { type: string, description: 'Commit SHA, tag, or "latest"' }
+        provider:        { type: string, description: 'Empty means auto-detect from project config' }
+        idempotency_key: { type: string, description: 'Derived from (project, environment, version)' }
+        auto_rollback:   { type: boolean, default: true }
+
+    Deployment:
+      type: object
+      properties:
+        id:           { type: string, examples: ['dpl_01HQ8XK3M9'] }
+        project_id:   { type: string }
+        environment:  { type: string }
+        state:        { $ref: '#/components/schemas/DeploymentState' }
+        provider:     { type: string }
+        version:      { type: string }
+        release_id:   { type: string, description: 'Provider-side release identifier' }
+        previous_id:  { type: string, description: 'Rollback target' }
+        triggered_by: { type: string }
+        error_class:  { $ref: '#/components/schemas/ErrorClass' }
+        error_detail: { type: string }
+        timings:      { $ref: '#/components/schemas/PhaseTimings' }
+        created_at:   { type: string, format: date-time }
+        updated_at:   { type: string, format: date-time }
+
+    DeploymentEvent:
+      type: object
+      properties:
+        deployment_id: { type: string }
+        seq:           { type: integer, format: int64, description: 'Per-deployment monotonic sequence; resume from here' }
+        type:          { type: string, examples: ['state_changed', 'phase_started', 'provider_call'] }
+        state:         { $ref: '#/components/schemas/DeploymentState' }
+        message:       { type: string }
+        emitted_at:    { type: string, format: date-time }
+
+    LogLine:
+      type: object
+      properties:
+        deployment_id: { type: string }
+        phase:         { type: string, enum: [build, deploy, verify] }
+        stream:        { type: string, enum: [stdout, stderr] }
+        line:          { type: string, description: 'Scrubbed of known secret values before emission' }
+        timestamp:     { type: string, format: date-time }
+
+    ConnectError:
+      type: object
+      description: Connect error envelope. HTTP status is derived from the code.
+      properties:
+        code:
+          type: string
+          enum: [invalid_argument, unauthenticated, permission_denied, not_found,
+                 already_exists, failed_precondition, resource_exhausted,
+                 aborted, unavailable, internal]
+        message: { type: string }
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              type:  { type: string }
+              value: { type: object, additionalProperties: true }
