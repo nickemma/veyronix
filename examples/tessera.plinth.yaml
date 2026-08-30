@@ -1,0 +1,11 @@
+name: tessera-gateway
+image: ghcr.io/nickemma/tessera:v0.4.1
+port: 8080
+replicas: 3
+env:
+  LOG_LEVEL: info
+secrets:
+  - DATABASE_URL
+resources:
+  cpu: 500m
+  memory: 512Mi

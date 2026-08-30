@@ -73,9 +73,11 @@ The concept, properly, before any code. Desired state. Observed state. Convergen
 
 **Broken:** kill the reconciler mid-action and restart it. Prove it converges anyway. That's the property that matters, and proving it on a toy is how you understand it on a real one.
 
-### Phase 2 · Week 28 — The manifest and the CLI
+### Phase 2 · Week 28 — The manifest, API, CLI, and test surfaces
 
-Schema design and validation — reject bad input at the edge with a useful message, never halfway through a deploy. The CLI: `plinth up`, `status`, `logs`, `rollback`, `destroy`. Server-side storage of desired state in Postgres, with revision history — because rollback is just "make revision N-1 the desired state again and let the loop do the rest."
+Schema design and validation — reject bad input at the edge with a useful message, never halfway through a deploy. The CLI: `plinth up`, `status`, `logs`, `rollback`, `pause`, `destroy`. Server-side storage of desired state in Postgres, with revision history — because rollback is just "make revision N-1 the desired state again and let the loop do the rest."
+
+The control plane also exposes the lifecycle through a documented HTTP API. Swagger UI documents the API contract, and a small browser playground exercises the same API for local and test-cluster verification. These are documentation and testing surfaces, not a product dashboard.
 
 ### Phase 3 · Weeks 29–30 — The Kubernetes API from the inside
 
@@ -120,7 +122,8 @@ Argo CD, and the manifests-in-git model. Then the real test: **deploy Tessera an
 - [ ] The operator/CRD version exists, and the comparison document is written
 - [ ] **Tessera and Lattice are deployed by Plinth**
 - [ ] The control plane can be down while workloads keep serving — proven, not assumed
-- [ ] `README.md` · `DESIGN_DOC.md` · `ADR/` · `RUNBOOK.md` · the comparison doc
+- [ ] Swagger UI documents the API and the playground can exercise it end to end
+- [ ] `README.md` · `DESIGN_DOC.md` · `ADR/` · `RUNBOOK.md` · `walkthrough.md` · the comparison doc
 
 ---
 
@@ -159,7 +162,7 @@ Keeping `providers/fake` in the finished product is deliberate — it's what mak
 
 ## Scope discipline
 
-Eight weeks means saying no. **Not building:** a web UI, multi-cloud support, service mesh integration, cost management, a plugin system, or anything Veyronix had that isn't the control loop.
+Eight weeks means saying no. **Not building:** a product dashboard, multi-cloud support, service mesh integration, cost management, a plugin system, or anything Veyronix had that isn't the control loop. Swagger UI and the test playground are deliberately narrow exceptions: they make the API and end-to-end behavior observable without becoming a second product.
 
 If it's week 33 and you're tempted to add a dashboard, the answer is no. Write it in `DEBT.md` and ship on time. A finished small platform beats an unfinished large one, and you have direct experience of which one you tend to build.
 
