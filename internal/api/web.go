@@ -46,6 +46,10 @@ const playgroundHTML = `<!doctype html>
   "secrets": ["DATABASE_URL"],
   "resources": {"cpu": "500m", "memory": "512Mi"}
 }</textarea>
+  <div>
+    <label>Actor <input id="actor" placeholder="local"></label>
+    <label>Team <input id="team" placeholder="default"></label>
+  </div>
   <div class="grid">
     <button onclick="applyManifest()">Apply manifest</button>
     <button onclick="listServices()">List services</button>
@@ -63,7 +67,12 @@ const playgroundHTML = `<!doctype html>
     const manifest = document.getElementById('manifest');
     const show = value => output.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
     const request = async (path, options = {}) => {
-      const response = await fetch('/api/v1' + path, {headers: {'Content-Type': 'application/json'}, ...options});
+      const headers = {'Content-Type': 'application/json'};
+      const actor = document.getElementById('actor').value.trim();
+      const team = document.getElementById('team').value.trim();
+      if (actor) headers['X-Plinth-Actor'] = actor;
+      if (team) headers['X-Plinth-Team'] = team;
+      const response = await fetch('/api/v1' + path, {headers, ...options});
       const value = await response.json();
       if (!response.ok) throw new Error(value.error || response.statusText);
       return value;

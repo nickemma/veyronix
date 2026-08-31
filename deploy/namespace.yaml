@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: plinth-system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: plinth-default
+  labels:
+    plinth.dev/ingress: allowed

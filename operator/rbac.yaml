@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: plinth-operator
+  namespace: plinth-system
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: plinth-operator
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+rules:
+  - apiGroups: ["plinth.dev"]
+    resources: ["plinthservices", "plinthservices/status"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: plinth-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: plinth-operator
+subjects:
+  - kind: ServiceAccount
+    name: plinth-operator
+    namespace: plinth-system

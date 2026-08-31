@@ -1,0 +1,80 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: plinthservices.plinth.dev
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  group: plinth.dev
+  scope: Namespaced
+  names:
+    plural: plinthservices
+    singular: plinthservice
+    kind: PlinthService
+    shortNames: [pls]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [image, port, replicas, resources]
+              properties:
+                image: {type: string}
+                port: {type: integer, minimum: 1, maximum: 65535}
+                replicas: {type: integer, minimum: 0, maximum: 1000}
+                env:
+                  type: object
+                  additionalProperties: {type: string}
+                secrets:
+                  type: array
+                  items: {type: string}
+                resources:
+                  type: object
+                  required: [cpu, memory]
+                  properties:
+                    cpu: {type: string}
+                    memory: {type: string}
+                rollout:
+                  type: object
+                  properties:
+                    enabled: {type: boolean}
+                    steps:
+                      type: array
+                      items: {type: integer, minimum: 1, maximum: 100}
+                    max_error_rate: {type: number, minimum: 0, maximum: 1}
+                revision: {type: integer, minimum: 1}
+            status:
+              type: object
+              properties:
+                phase: {type: string}
+                message: {type: string}
+                updatedAt: {type: string, format: date-time}
+                observedGeneration: {type: integer, format: int64}
+                rolloutStep: {type: integer, minimum: 0, maximum: 100}
+                observed:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      kind: {type: string}
+                      name: {type: string}
+                      ready: {type: boolean}
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status, reason, message]
+                    properties:
+                      type: {type: string}
+                      status: {type: string}
+                      reason: {type: string}
+                      message: {type: string}
+                      lastTransitionTime: {type: string, format: date-time}

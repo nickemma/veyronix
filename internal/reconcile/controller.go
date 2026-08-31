@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/nickemma/plinth/internal/backend"
 	"github.com/nickemma/plinth/internal/manifest"
@@ -11,16 +12,25 @@ import (
 )
 
 type Controller struct {
-	store   *state.Store
+	store   state.Repository
 	backend backend.Backend
+	locksMu sync.Mutex
+	locks   map[string]*sync.Mutex
 }
 
-func NewController(store *state.Store, target backend.Backend) *Controller {
-	return &Controller{store: store, backend: target}
+func NewController(store state.Repository, target backend.Backend) *Controller {
+	return &Controller{store: store, backend: target, locks: map[string]*sync.Mutex{}}
 }
 
-// ReconcileAll rebuilds the fake backend after a process restart and is also
-// the startup shape the Kubernetes controller will use later.
+func (c *Controller) EnsureNamespace(ctx context.Context, namespace string) error {
+	if manager, ok := c.backend.(backend.NamespaceManager); ok {
+		return manager.EnsureNamespace(ctx, namespace)
+	}
+	return nil
+}
+
+// ReconcileAll rebuilds backend state after a process restart and is also the
+// startup pass used by the Kubernetes-backed control plane.
 func (c *Controller) ReconcileAll(ctx context.Context) error {
 	var firstErr error
 	for _, service := range c.store.List() {
@@ -35,11 +45,13 @@ func (c *Controller) ReconcileAll(ctx context.Context) error {
 }
 
 func (c *Controller) Apply(ctx context.Context, m manifest.Manifest) (state.Service, error) {
+	unlock := c.lockService(m.Name)
+	defer unlock()
 	service, err := c.store.Apply(m, "apply")
 	if err != nil {
 		return state.Service{}, err
 	}
-	return c.Reconcile(ctx, service.Name)
+	return c.reconcileLocked(ctx, service.Name)
 }
 
 // ApplyDesired records a revision without waiting for the backend. The
@@ -50,6 +62,12 @@ func (c *Controller) ApplyDesired(m manifest.Manifest) (state.Service, error) {
 }
 
 func (c *Controller) Reconcile(ctx context.Context, name string) (state.Service, error) {
+	unlock := c.lockService(name)
+	defer unlock()
+	return c.reconcileLocked(ctx, name)
+}
+
+func (c *Controller) reconcileLocked(ctx context.Context, name string) (state.Service, error) {
 	service, err := c.store.Get(name)
 	if err != nil {
 		return state.Service{}, err
@@ -64,6 +82,7 @@ func (c *Controller) Reconcile(ctx context.Context, name string) (state.Service,
 	if err != nil {
 		return state.Service{}, err
 	}
+	wasRolledBack := service.Phase == state.PhaseRolledBack
 	_, err = c.store.Update(name, func(current *state.Service) error {
 		current.Phase = state.PhaseReconciling
 		current.Message = fmt.Sprintf("reconciling revision %d", revision.Number)
@@ -73,13 +92,34 @@ func (c *Controller) Reconcile(ctx context.Context, name string) (state.Service,
 	if err != nil {
 		return state.Service{}, err
 	}
-	result, applyErr := c.backend.Ensure(ctx, revision.Manifest, revision.Number)
+	result, applyErr := backend.EnsureWithRolloutFrom(ctx, c.backend, revision.Manifest, revision.Number, service.RolloutStep)
+	if applyErr == nil && !result.Ready {
+		waiting, updateErr := c.store.Update(name, func(current *state.Service) error {
+			current.Phase = state.PhaseReconciling
+			current.Message = fmt.Sprintf("revision %d is waiting for backend readiness", revision.Number)
+			current.RolloutStep = result.RolloutStep
+			for _, line := range result.Logs {
+				state.AddLog(current, "stdout", line)
+			}
+			state.AddEvent(current, "reconcile_waiting", current.Message)
+			return nil
+		})
+		if updateErr != nil {
+			return state.Service{}, updateErr
+		}
+		return waiting, nil
+	}
 	if applyErr == nil {
 		return c.store.Update(name, func(current *state.Service) error {
 			current.ActiveRevision = revision.Number
 			current.LastKnownGood = revision.Number
 			current.Phase = state.PhaseReady
 			current.Message = fmt.Sprintf("revision %d is converged", revision.Number)
+			current.RolloutStep = result.RolloutStep
+			if wasRolledBack {
+				current.Phase = state.PhaseRolledBack
+				current.Message = fmt.Sprintf("revision %d remains restored", revision.Number)
+			}
 			current.Observed = resourceNames(result.Resources)
 			for _, line := range result.Logs {
 				state.AddLog(current, "stdout", line)
@@ -91,6 +131,7 @@ func (c *Controller) Reconcile(ctx context.Context, name string) (state.Service,
 
 	failed, updateErr := c.store.Update(name, func(current *state.Service) error {
 		current.Phase = state.PhaseFailed
+		current.RolloutStep = result.RolloutStep
 		current.Message = fmt.Sprintf("revision %d failed: %v", revision.Number, applyErr)
 		for _, line := range result.Logs {
 			state.AddLog(current, "stderr", line)
@@ -120,6 +161,10 @@ func (c *Controller) Reconcile(ctx context.Context, name string) (state.Service,
 		return final, applyErr
 	}
 	final, statusErr := c.store.Update(name, func(current *state.Service) error {
+		// The failed revision remains in history, but it must stop being the
+		// desired target or every periodic resync would retry it forever.
+		current.DesiredRevision = lastGood.Number
+		current.RolloutStep = 0
 		current.ActiveRevision = lastGood.Number
 		current.Phase = state.PhaseRolledBack
 		current.Message = fmt.Sprintf("revision %d failed; revision %d restored", revision.Number, lastGood.Number)
@@ -137,14 +182,18 @@ func (c *Controller) Reconcile(ctx context.Context, name string) (state.Service,
 }
 
 func (c *Controller) Rollback(ctx context.Context, name string, target int) (state.Service, error) {
+	unlock := c.lockService(name)
+	defer unlock()
 	service, err := c.store.Rollback(name, target)
 	if err != nil {
 		return state.Service{}, err
 	}
-	return c.Reconcile(ctx, service.Name)
+	return c.reconcileLocked(ctx, service.Name)
 }
 
 func (c *Controller) Pause(name string) (state.Service, error) {
+	unlock := c.lockService(name)
+	defer unlock()
 	return c.store.Update(name, func(service *state.Service) error {
 		service.Paused = true
 		service.Phase = state.PhasePaused
@@ -155,6 +204,8 @@ func (c *Controller) Pause(name string) (state.Service, error) {
 }
 
 func (c *Controller) Resume(ctx context.Context, name string) (state.Service, error) {
+	unlock := c.lockService(name)
+	defer unlock()
 	service, err := c.store.Update(name, func(service *state.Service) error {
 		service.Paused = false
 		service.Phase = state.PhasePending
@@ -165,10 +216,12 @@ func (c *Controller) Resume(ctx context.Context, name string) (state.Service, er
 	if err != nil {
 		return state.Service{}, err
 	}
-	return c.Reconcile(ctx, service.Name)
+	return c.reconcileLocked(ctx, service.Name)
 }
 
 func (c *Controller) Destroy(ctx context.Context, name string) (state.Service, error) {
+	unlock := c.lockService(name)
+	defer unlock()
 	if err := c.backend.Delete(ctx, name); err != nil {
 		return state.Service{}, err
 	}
@@ -183,6 +236,8 @@ func (c *Controller) Destroy(ctx context.Context, name string) (state.Service, e
 }
 
 func (c *Controller) Drift(ctx context.Context, name, kind string) (state.Service, error) {
+	unlock := c.lockService(name)
+	defer unlock()
 	if err := c.backend.DeleteResource(ctx, name, kind); err != nil {
 		return state.Service{}, err
 	}
@@ -194,7 +249,19 @@ func (c *Controller) Drift(ctx context.Context, name, kind string) (state.Servic
 	if err != nil {
 		return state.Service{}, err
 	}
-	return c.Reconcile(ctx, service.Name)
+	return c.reconcileLocked(ctx, service.Name)
+}
+
+func (c *Controller) lockService(name string) func() {
+	c.locksMu.Lock()
+	lock := c.locks[name]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		c.locks[name] = lock
+	}
+	c.locksMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
 }
 
 func resourceNames(resources []backend.Resource) []string {

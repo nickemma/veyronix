@@ -1,0 +1,14 @@
+apiVersion: plinth.dev/v1alpha1
+kind: PlinthService
+metadata:
+  name: lattice
+  namespace: plinth-default
+spec:
+  image: ghcr.io/nickemma/lattice:v0.1.0
+  port: 8080
+  replicas: 2
+  env:
+    LOG_LEVEL: info
+  resources:
+    cpu: 250m
+    memory: 256Mi

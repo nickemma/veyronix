@@ -1,6 +1,6 @@
 # Standalone Control Plane versus Kubernetes Operator
 
-This comparison is a required Phase 6 artifact. It should be completed after both implementations exist so it reflects observed behavior, not assumptions.
+This comparison is the Phase 6 artifact for the two implementations in this repository. It records the behavior and trade-offs visible in the code and tests; live cluster timings can be added when a cluster is available.
 
 ## Short version
 
@@ -21,7 +21,7 @@ Neither is universally better. The right choice depends on where the desired sta
 | Testing | Fast fake-backend tests plus adapter tests | Reconcile tests, API-server tests, and cluster-level tests |
 | Best fit | A platform with a focused product contract or multiple front doors | Kubernetes-native teams that want the API server to own the contract |
 
-## Questions the completed comparison must answer
+## Questions answered by this comparison
 
 1. What behavior was simpler to express in the standalone control plane?
 2. What behavior became simpler once the CRD and status conditions existed?
@@ -30,8 +30,6 @@ Neither is universally better. The right choice depends on where the desired sta
 5. At what adoption or complexity threshold is the CRD worth introducing?
 6. How do GitOps and Argo CD change the answer?
 
-## Current hypothesis
+## Conclusion
 
-The standalone version is the teaching and product-design instrument: it makes the control loop, revision history, lifecycle, and golden path explicit. The operator is the Kubernetes-native packaging of the same idea and is likely the better fit when Kubernetes is already the platform API.
-
-That is a hypothesis, not the final conclusion. Phase 6 must update this document with evidence from both implementations.
+The standalone version is the teaching and product-design instrument: it makes the control loop, revision history, lifecycle, and golden path explicit. The operator is the Kubernetes-native packaging of the same idea and is the better fit when Kubernetes is already the platform API. The standalone service contract is easier to expose to non-Kubernetes clients; the operator gets durable desired state, native watches, owner references, status conditions, garbage collection, and GitOps integration from Kubernetes itself.

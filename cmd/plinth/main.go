@@ -71,14 +71,20 @@ func up(apiURL string, args []string) error {
 }
 
 func status(apiURL string, args []string) error {
-	flags := flag.NewFlagSet("status", flag.ContinueOnError)
-	watch := flags.Bool("watch", false, "poll until a terminal state")
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
+	watch := false
 	name := ""
-	if flags.NArg() > 0 {
-		name = flags.Arg(0)
+	for _, arg := range args {
+		switch arg {
+		case "--watch", "-w":
+			watch = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return fmt.Errorf("unknown flag %q", arg)
+			}
+			if name == "" {
+				name = arg
+			}
+		}
 	}
 	path := "/api/v1/services"
 	if name != "" {
@@ -90,7 +96,7 @@ func status(apiURL string, args []string) error {
 			return err
 		}
 		printJSON(value)
-		if !*watch || name == "" {
+		if !watch || name == "" {
 			return nil
 		}
 		var service state.Service
@@ -105,14 +111,54 @@ func status(apiURL string, args []string) error {
 }
 
 func collection(apiURL string, args []string, collection string) error {
-	if len(args) == 0 {
+	follow := false
+	name := ""
+	for _, arg := range args {
+		switch arg {
+		case "--follow", "-f":
+			follow = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return fmt.Errorf("unknown flag %q", arg)
+			}
+			if name == "" {
+				name = arg
+			}
+		}
+	}
+	if name == "" {
 		return errors.New(collection + " requires a service name")
 	}
-	var value any
-	if err := requestJSON(apiURL+"/api/v1/services/"+args[0]+"/"+collection, http.MethodGet, nil, &value); err != nil {
-		return err
+	path := apiURL + "/api/v1/services/" + name + "/" + collection
+	if !follow {
+		var value any
+		if err := requestJSON(path, http.MethodGet, nil, &value); err != nil {
+			return err
+		}
+		return printJSON(value)
 	}
-	return printJSON(value)
+	seen := 0
+	for {
+		var lines []state.LogLine
+		if err := requestJSON(path, http.MethodGet, nil, &lines); err != nil {
+			return err
+		}
+		if seen < len(lines) {
+			if err := printJSON(lines[seen:]); err != nil {
+				return err
+			}
+			seen = len(lines)
+		}
+		var service state.Service
+		if err := requestJSON(apiURL+"/api/v1/services/"+name, http.MethodGet, nil, &service); err != nil {
+			return err
+		}
+		switch service.Phase {
+		case state.PhaseReady, state.PhaseRolledBack, state.PhaseFailed, state.PhasePaused, state.PhaseDestroyed:
+			return nil
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 }
 
 func action(apiURL string, args []string, action string) error {
@@ -148,6 +194,12 @@ func requestJSON(url, method string, body any, target any) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if actor := os.Getenv("PLINTH_ACTOR"); actor != "" {
+		req.Header.Set("X-Plinth-Actor", actor)
+	}
+	if team := os.Getenv("PLINTH_TEAM"); team != "" {
+		req.Header.Set("X-Plinth-Team", team)
+	}
 	response, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("connect to %s: %w", url, err)

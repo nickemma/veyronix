@@ -5,6 +5,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/nickemma/plinth/internal/backend"
 )
 
 // Worker turns reconciliation into a level-triggered process. Requests and
@@ -52,6 +54,13 @@ func (w *Worker) Enqueue(name string) {
 
 func (w *Worker) Start(ctx context.Context) {
 	go func() {
+		if watcher, ok := w.controller.backend.(backend.Watcher); ok {
+			go func() {
+				if err := watcher.Watch(ctx, w.Enqueue); err != nil && ctx.Err() == nil {
+					log.Printf("backend watch: %v", err)
+				}
+			}()
+		}
 		for _, service := range w.controller.store.List() {
 			w.Enqueue(service.Name)
 		}

@@ -10,7 +10,7 @@ plinth up
 
 Plinth stores the desired state, observes what is actually running, and reconciles the difference until the service converges. The developer does not need to write Kubernetes manifests, configure ingress or TLS, wire up monitoring, or remember the rollback procedure.
 
-This repository is starting from scratch. There is no working control plane yet; the project is built in deliberately small increments so every important behavior can be demonstrated and explained.
+This repository is intentionally small, but it is end-to-end: the control plane, fake and Kubernetes backends, persistence, tenancy policy, operator/CRD, GitOps manifests, Swagger UI, playground, tests, and walkthrough live together.
 
 ## The idea
 
@@ -26,7 +26,7 @@ The loop must be idempotent and level-triggered. It should recover after a proce
 
 ## What Plinth provides
 
-From a small manifest, Plinth will provide:
+From a small manifest, Plinth provides:
 
 - a running, reachable service with TLS and a DNS name;
 - metrics scraping and structured log shipping;
@@ -56,7 +56,7 @@ resources:
   memory: 512Mi
 ```
 
-The initial lifecycle is intentionally small:
+The lifecycle is intentionally small:
 
 ```bash
 plinth up
@@ -67,7 +67,7 @@ plinth pause
 plinth destroy
 ```
 
-Configuration, secrets, and platform configuration remain separate concepts. Environment promotion from dev to staging to production is also part of the intended platform experience, while staying within the project's scope.
+Configuration, secrets, and platform configuration remain separate concepts. Secret values are supplied by the target cluster's secret-management system; Plinth stores only references.
 
 ## Build order
 
@@ -79,7 +79,7 @@ The work is organized around learning and proof, not around building a large fea
 4. Add the golden path defaults: TLS, DNS, metrics, logs, probes, limits, security, disruption protection, and network policy.
 5. Add teams, namespaces, RBAC, quotas, audit history, rollback, and progressive rollout safety.
 6. Rebuild the core as a Kubernetes operator with a CRD, then document the standalone-control-plane versus operator trade-offs.
-7. Add GitOps with Argo CD and deploy Tessera and Lattice through Plinth itself.
+7. Wire the repository into Argo CD and deploy Tessera and Lattice through the operator-backed Plinth path.
 
 Each stage should leave behind a working demonstration and a failure scenario that explains why the design is shaped this way.
 
@@ -90,6 +90,7 @@ Each stage should leave behind a working demonstration and a failure scenario th
 - [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — operational procedures and failure drills.
 - [`docs/COMPARISON.md`](docs/COMPARISON.md) — the standalone control plane versus the Kubernetes operator.
 - [`docs/ADR/README.md`](docs/ADR/README.md) — where important implementation decisions will be recorded.
+- [`api.md`](api.md) — the complete HTTP API reference and CLI mapping.
 - [`walkthrough.md`](walkthrough.md) — the end-to-end test path using the CLI, Swagger UI, and playground.
 
 If another document conflicts with `docs/plinth.md`, `docs/plinth.md` wins and the other document must be corrected.
@@ -100,4 +101,4 @@ Plinth is not a product dashboard, multi-cloud platform, service mesh, cost-mana
 
 ## Status
 
-The first vertical slice is working: the fake reconciler, queued worker, file-backed state, CLI, HTTP API, Swagger UI, playground, drift repair, rollback, and restart recovery are implemented. The Kubernetes adapter and fake-client tests are now in place; cluster verification, Postgres, tenancy, the operator, and GitOps are the next phases.
+The implementation is present end to end. The fake backend provides deterministic local and CI verification; the Kubernetes adapter, Postgres store, tenancy policy, audit export, rollout guard, operator/CRD, Argo CD manifests, Swagger UI, playground, and CLI are wired into the same lifecycle. Unit, fake-client, race, vet, build, and manifest-render checks pass. A disposable kind-cluster run also verifies Tessera/Lattice deployment, drift repair, workload serving during control-plane downtime, and Prometheus-backed rollout abort/restore. Production Postgres, ingress/cert-manager/DNS, and external logging/metrics setup remain target-environment concerns; the exact verification commands are in [`docs/walkthrough.md`](docs/walkthrough.md).

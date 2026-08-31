@@ -2,7 +2,7 @@
 
 **A minimal internal developer platform. The Veyronix replacement — smaller, personal, and finishable.**
 
-`github.com/nickemma/plinth` · Project 3 · weeks 27–34
+`github.com/nickemma/veyronix` · Project 3 · weeks 27–34
 
 *A plinth is the base a structure stands on. Rename it if something better lands — the name isn't load-bearing, the control loop is.*
 
@@ -45,7 +45,7 @@ plinth up
 
 And the service is running, on a URL, with TLS, metrics being scraped, logs being shipped, secrets injected, resource limits enforced, running as non-root, with health probes wired and `plinth rollback` available.
 
-**That's a golden path.** The developer never touches a Kubernetes manifest. Everything correct-by-default happens because the platform did it, not because they remembered.
+**That's a golden path.** The developer never touches a Kubernetes manifest. Everything correct-by-default happens because the platform did it, not because they remembered. Secret values stay outside the application database; the manifest declares references that the target cluster's secret mechanism supplies.
 
 **The claim it earns you:** *"I built a control plane with a reconciliation loop. It's the same pattern Kubernetes runs on, and I can explain why reconciliation beats imperative deployment when things go wrong."*
 
@@ -83,7 +83,7 @@ The control plane also exposes the lifecycle through a documented HTTP API. Swag
 
 Not `kubectl`. The API. `client-go`: typed clients, informers, work queues, watch semantics, resync, optimistic concurrency and resource versions, owner references and cascading deletion, server-side apply.
 
-**Built:** the Kubernetes adapter. Your reconciler now creates real Deployments, Services, Ingresses, ConfigMaps, and Secrets.
+**Built:** the Kubernetes adapter. Your reconciler now creates real Deployments, Services, Ingresses, ConfigMaps, PodDisruptionBudgets, and NetworkPolicies, with secret references wired into the workload contract.
 
 **Broken:** two reconcilers running at once — watch the conflict, then fix it with resource versions. Delete a Deployment out from under the control plane. Make the API server unreachable mid-reconcile.
 
@@ -113,17 +113,19 @@ Argo CD, and the manifests-in-git model. Then the real test: **deploy Tessera an
 
 ## Done means
 
-- [ ] `plinth up` takes a manifest and produces a running, reachable, TLS-terminated service
-- [ ] The reconciler converges from any starting state, including after being killed mid-action
-- [ ] Manual drift is detected and corrected — delete a pod, watch it come back for the right reason
-- [ ] Rollback to any previous revision, demonstrated and timed
-- [ ] The golden path applies all nine defaults without the developer asking
-- [ ] Multi-team with RBAC, quotas, and an audit log
-- [ ] The operator/CRD version exists, and the comparison document is written
-- [ ] **Tessera and Lattice are deployed by Plinth**
-- [ ] The control plane can be down while workloads keep serving — proven, not assumed
-- [ ] Swagger UI documents the API and the playground can exercise it end to end
-- [ ] `README.md` · `DESIGN_DOC.md` · `ADR/` · `RUNBOOK.md` · `walkthrough.md` · the comparison doc
+- [ ] `plinth up` takes a manifest and produces a running, reachable, TLS-terminated service (live cluster proof)
+- [x] The reconciler converges from any starting state, including after being killed mid-action (fake and client tests)
+- [x] Manual drift is detected and corrected — delete a pod, watch it come back for the right reason (fake path and test helper)
+- [x] Rollback to any previous revision, demonstrated and timed (fake path)
+- [x] The golden path applies all nine defaults without the developer asking (fake and client-go adapters)
+- [x] Multi-team with RBAC policy, quotas, and an audit log
+- [x] The operator/CRD version exists, and the comparison document is written
+- [x] **Tessera and Lattice are deployed by Plinth** (disposable kind-cluster proof)
+- [x] The control plane can be down while workloads keep serving — proven, not assumed (direct workload check)
+- [x] Swagger UI documents the API and the playground can exercise it end to end
+- [x] `README.md` · `DESIGN_DOC.md` · `ADR/` · `RUNBOOK.md` · `walkthrough.md` · the comparison doc
+
+The checked items are implemented and covered by local, fake-client, or disposable-cluster evidence. The remaining TLS item requires a target cluster with an ingress controller, cert-manager issuer, and DNS routing; the repository includes the manifests and exact commands for that final proof.
 
 ---
 
@@ -141,22 +143,19 @@ It also strengthens every application already open, because "I built a control p
 plinth/
 ├─ cmd/{plinth,plinthd}/          CLI and control plane
 ├─ internal/
-│   ├─ app/  ├─ platform/
-│   ├─ modules/
-│   │   ├─ manifest/    parse, validate, version
-│   │   ├─ desired/     state store, revisions
-│   │   ├─ reconcile/   the loop — the heart of it
-│   │   ├─ tenancy/
-│   │   └─ audit/
-│   └─ providers/
-│       ├─ kubernetes/  client-go adapter
-│       └─ fake/        the in-memory backend from week 27
+│   ├─ api/              HTTP API, Swagger UI, playground
+│   ├─ backend/          fake and Kubernetes adapters
+│   ├─ manifest/         parse and validate
+│   ├─ reconcile/        the loop and worker
+│   ├─ state/            file-backed and Postgres persistence
+│   └─ tenancy/          teams and quotas
 ├─ operator/                      the CRD version
 ├─ examples/                      tessera.plinth.yaml, lattice.plinth.yaml
 ├─ deploy/  └─ docs/
+│   └─ walkthrough.md    end-to-end verification
 ```
 
-Keeping `providers/fake` in the finished product is deliberate — it's what makes the reconciler testable without a cluster, and it demonstrates that ports-and-adapters was a real design decision rather than folder decoration.
+Keeping `backend.Fake` in the finished product is deliberate — it makes the reconciler testable without a cluster and demonstrates that the backend boundary is a real design decision rather than folder decoration.
 
 ---
 

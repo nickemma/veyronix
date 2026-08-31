@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: plinthd
+  namespace: plinth-system
+  labels:
+    app.kubernetes.io/name: plinthd
+    app.kubernetes.io/managed-by: plinth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: plinthd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: plinthd
+    spec:
+      serviceAccountName: plinthd
+      containers:
+        - name: plinthd
+          image: ghcr.io/nickemma/plinthd:dev
+          args:
+            - --backend=kubernetes
+            - --namespace=plinth-default
+          env:
+            - name: PLINTH_DATABASE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: plinth-postgres
+                  key: PLINTH_DATABASE_DSN
+            # Required when a manifest enables progressive rollout.
+            - name: PLINTH_PROMETHEUS_URL
+              value: ""
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: plinthd
+  namespace: plinth-system
+spec:
+  selector:
+    app.kubernetes.io/name: plinthd
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

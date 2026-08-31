@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: plinthd
+  namespace: plinth-system
+---
+# The control plane is a central service and may reconcile a team namespace
+# selected by policy. The API still enforces team membership; this binding
+# gives the reconciler the backend permissions needed after that decision.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: plinthd-workloads
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "create", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["services", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: plinthd-workloads
+subjects:
+  - kind: ServiceAccount
+    name: plinthd
+    namespace: plinth-system
+roleRef:
+  kind: ClusterRole
+  name: plinthd-workloads
+  apiGroup: rbac.authorization.k8s.io

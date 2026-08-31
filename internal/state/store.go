@@ -36,6 +36,29 @@ type LogLine struct {
 	Message string    `json:"message"`
 }
 
+type AuditRecord struct {
+	ID               int       `json:"id"`
+	Time             time.Time `json:"time"`
+	Actor            string    `json:"actor"`
+	Team             string    `json:"team"`
+	Action           string    `json:"action"`
+	Resource         string    `json:"resource"`
+	Revision         int       `json:"revision"`
+	PreviousRevision int       `json:"previous_revision"`
+	Outcome          string    `json:"outcome"`
+	Detail           string    `json:"detail,omitempty"`
+}
+
+// TeamRecord is the persistence-neutral representation of tenancy policy.
+// The API layer maps it to its policy type so state storage remains usable by
+// both the file and Postgres implementations.
+type TeamRecord struct {
+	Name         string   `json:"name"`
+	Members      []string `json:"members"`
+	Namespace    string   `json:"namespace"`
+	ServiceQuota int      `json:"service_quota"`
+}
+
 type Revision struct {
 	Number    int               `json:"number"`
 	Manifest  manifest.Manifest `json:"manifest"`
@@ -45,9 +68,11 @@ type Revision struct {
 
 type Service struct {
 	Name            string     `json:"name"`
+	Team            string     `json:"team"`
 	DesiredRevision int        `json:"desired_revision"`
 	ActiveRevision  int        `json:"active_revision"`
 	LastKnownGood   int        `json:"last_known_good"`
+	RolloutStep     int        `json:"rollout_step,omitempty"`
 	Paused          bool       `json:"paused"`
 	Destroyed       bool       `json:"destroyed"`
 	Phase           string     `json:"phase"`
@@ -60,7 +85,9 @@ type Service struct {
 }
 
 type database struct {
-	Services map[string]*Service `json:"services"`
+	Services map[string]*Service   `json:"services"`
+	Audit    []AuditRecord         `json:"audit"`
+	Teams    map[string]TeamRecord `json:"teams,omitempty"`
 }
 
 type Store struct {
@@ -69,8 +96,30 @@ type Store struct {
 	db   database
 }
 
+// Repository is the persistence seam. The file-backed implementation keeps
+// local development dependency-free; Postgres implements the same contract
+// for the control-plane deployment.
+type Repository interface {
+	Get(string) (Service, error)
+	List() []Service
+	Apply(manifest.Manifest, string) (Service, error)
+	Rollback(string, int) (Service, error)
+	Update(string, func(*Service) error) (Service, error)
+	Revision(string, int) (Revision, error)
+}
+
+type Auditor interface {
+	AddAudit(AuditRecord) error
+	Audit() []AuditRecord
+}
+
+type TeamRepository interface {
+	SaveTeam(TeamRecord) error
+	Teams() []TeamRecord
+}
+
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, db: database{Services: map[string]*Service{}}}
+	s := &Store{path: path, db: database{Services: map[string]*Service{}, Teams: map[string]TeamRecord{}}}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -84,7 +133,51 @@ func Open(path string) (*Store, error) {
 	if s.db.Services == nil {
 		s.db.Services = map[string]*Service{}
 	}
+	if s.db.Teams == nil {
+		s.db.Teams = map[string]TeamRecord{}
+	}
 	return s, nil
+}
+
+func (s *Store) SaveTeam(team TeamRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.db.Teams == nil {
+		s.db.Teams = map[string]TeamRecord{}
+	}
+	team.Members = append([]string(nil), team.Members...)
+	s.db.Teams[team.Name] = team
+	return s.persistLocked()
+}
+
+func (s *Store) Teams() []TeamRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]TeamRecord, 0, len(s.db.Teams))
+	for _, team := range s.db.Teams {
+		team.Members = append([]string(nil), team.Members...)
+		result = append(result, team)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	return result
+}
+
+func (s *Store) AddAudit(record AuditRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record.ID = len(s.db.Audit) + 1
+	if record.Time.IsZero() {
+		record.Time = time.Now().UTC()
+	}
+	s.db.Audit = append(s.db.Audit, record)
+	return s.persistLocked()
+}
+
+func (s *Store) Audit() []AuditRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := append([]AuditRecord(nil), s.db.Audit...)
+	return result
 }
 
 func (s *Store) Get(name string) (Service, error) {
@@ -109,6 +202,9 @@ func (s *Store) List() []Service {
 }
 
 func (s *Store) Apply(m manifest.Manifest, reason string) (Service, error) {
+	if err := m.Validate(); err != nil {
+		return Service{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	service := s.db.Services[m.Name]
@@ -125,6 +221,7 @@ func (s *Store) Apply(m manifest.Manifest, reason string) (Service, error) {
 	number := len(service.History) + 1
 	service.History = append(service.History, Revision{Number: number, Manifest: m, CreatedAt: time.Now().UTC(), Reason: reason})
 	service.DesiredRevision = number
+	service.RolloutStep = 0
 	service.Paused = false
 	service.Destroyed = false
 	service.Phase = PhasePending
@@ -157,6 +254,7 @@ func (s *Store) Rollback(name string, target int) (Service, error) {
 	number := len(service.History) + 1
 	service.History = append(service.History, Revision{Number: number, Manifest: selected.Manifest, CreatedAt: time.Now().UTC(), Reason: fmt.Sprintf("rollback to revision %d", target)})
 	service.DesiredRevision = number
+	service.RolloutStep = 0
 	service.Paused = false
 	service.Destroyed = false
 	service.Phase = PhasePending

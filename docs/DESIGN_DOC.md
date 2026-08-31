@@ -48,7 +48,7 @@ The loop must be safe to run repeatedly. It must also be correct when:
 
 The fake backend is not throwaway code. It proves the control-loop semantics without requiring a cluster and remains a permanent test backend.
 
-## 3. Planned repository shape
+## 3. Repository shape
 
 ```text
 cmd/
@@ -57,23 +57,17 @@ cmd/
 api/
   openapi.yaml         HTTP contract used by Swagger UI
 internal/
-  app/                 composition and application wiring
-  platform/            shared technical infrastructure
-  modules/
-    manifest/          parsing, validation, and revisions
-    desired/           desired-state storage
-    reconcile/         reconciliation loop
-    tenancy/           teams, namespaces, RBAC, quotas
-    audit/             append-only change history
-  providers/
-    fake/              in-memory backend for phase 1 and tests
-    kubernetes/        client-go adapter
-operator/              CRD and kubebuilder controller
+  api/                  HTTP API, Swagger UI, and playground
+  backend/              fake and client-go providers
+  manifest/             parsing and validation
+  reconcile/            reconciliation loop and worker
+  state/                file-backed and Postgres state stores
+  tenancy/              teams, namespaces, and quotas
+operator/              CRD and Kubernetes reconcile controller
 examples/              service manifests for Tessera and Lattice
 deploy/                manifests and platform dependencies
-web/playground/        test-only browser client for the Plinth API
 docs/                  design, operations, ADRs, comparison
-walkthrough.md         end-to-end verification path
+docs/walkthrough.md    end-to-end verification path
 ```
 
 The exact package boundaries can evolve, but the responsibilities should not be mixed. The reconciler should express desired behavior, while providers translate that behavior to a backend.
@@ -101,13 +95,13 @@ The manifest is the user-facing input. Validation happens before any cluster mut
 - resource quantities;
 - allowed lifecycle operations.
 
-The first vertical slice stores validated desired state and revision history in a file-backed store so it can run with no external services. Phase 2 replaces that store with Postgres behind the same state boundary. A rollback does not become a special imperative deployment path: it selects an earlier revision as desired state and lets the same reconciler converge to it.
+The local path stores validated desired state and revision history in a file-backed store so it can run with no external services. The control-plane deployment can select Postgres behind the same state boundary. A rollback does not become a special imperative deployment path: it selects an earlier revision as desired state and lets the same reconciler converge to it.
 
-Configuration, secrets, and platform configuration are separate. Secret values are not stored in the application database. The implementation of secret injection must be chosen before the golden-path phase and documented in an ADR; the product contract is that developers declare secret names while Plinth handles safe injection.
+Configuration, secrets, and platform configuration are separate. Secret values are not stored in the application database. Developers declare secret names; Plinth emits references to an existing `<service>-secrets` Secret, while the target cluster's secret-management system provisions and rotates its values.
 
 ## 6. Kubernetes adapter
 
-The Kubernetes adapter uses the API directly through `client-go`, not `kubectl`. Its fake-client tests cover resource creation and repeat application; cluster verification is the next step. The adapter demonstrates:
+The Kubernetes adapter uses the API directly through `client-go`, not `kubectl`. Its fake-client tests cover resource creation and repeat application. A live cluster run is an environment-dependent verification step. The adapter demonstrates:
 
 - typed clients and informers;
 - watches, work queues, and resync;
@@ -116,7 +110,7 @@ The Kubernetes adapter uses the API directly through `client-go`, not `kubectl`.
 - server-side apply;
 - status observation and conditions.
 
-The adapter will create and manage the resources needed for the golden path, including Deployments, Services, Ingresses, ConfigMaps, Secrets or their chosen secret-injection equivalent, PodDisruptionBudgets, and NetworkPolicies.
+The adapter creates and manages the resources needed for the golden path, including Deployments, Services, Ingresses, ConfigMaps, the chosen external Secret injection reference, PodDisruptionBudgets, and NetworkPolicies.
 
 The control plane is not in the workload request path. If Plinth is down after resources have been applied, services must continue serving. When Plinth returns, reconciliation resumes from desired and observed state.
 
@@ -134,25 +128,30 @@ The golden path is a platform policy, not an optional template. A service submit
 8. a pod disruption budget;
 9. a default-deny network policy.
 
-The generated resources should carry clear ownership and labels so status, logs, audit entries, and cleanup can be associated with the Plinth service and revision.
+The read-only root filesystem is paired with a small ephemeral runtime-data
+volume at `/home/nonroot/.lattice-data`, owned by the non-root runtime group.
+This keeps application state writes explicit and disposable without making the
+container root filesystem writable.
+
+The generated resources should carry clear ownership and labels so status, logs, audit entries, and cleanup can be associated with the Plinth service and revision. The default-deny NetworkPolicy explicitly allows ingress from namespaces labeled `plinth.dev/ingress=allowed` and DNS egress to `kube-system`; application-specific egress remains an intentional platform policy decision.
 
 ## 8. Tenancy and safety
 
 Teams map to namespaces and receive explicit RBAC permissions. Resource quotas prevent one team from consuming the cluster without bounds. Every state-changing action records who changed what, when, the selected revision, and the previous revision.
 
-Rollback is revision selection plus reconciliation. Progressive rollout is a guarded version transition: Plinth observes health and error-rate signals, continues while the release is within its policy, and aborts back to the last known-good revision when the policy is violated.
+Rollback is revision selection plus reconciliation. Progressive rollout is a guarded version transition: Plinth observes readiness and error-rate signals, continues while the release is within its policy, and aborts back to the last known-good revision when the policy is violated. The Kubernetes adapter reads the Prometheus instant-query API when `PLINTH_PROMETHEUS_URL` is configured; it fails closed when a rollout has no metric source. The default query expects `http_requests_total` series labeled with `namespace`, `service`, and `status`, and a custom four-placeholder query can be supplied for a cluster's metric schema.
 
-The first implementation should keep policy simple and explainable. Complexity belongs in a later decision record only when a demonstrated requirement demands it.
+The implementation keeps policy simple and explainable: team definitions are persisted alongside service state, map to namespaces, and are enforced on API reads and writes. Complexity belongs in a later decision record only when a demonstrated requirement demands it.
 
 ## 9. Operator comparison
 
-Phase 6 implements the same core behavior as a genuine Kubernetes operator: a CRD, kubebuilder-generated scaffolding, a controller reconcile function, status subresources and conditions, and finalizers. [`COMPARISON.md`](COMPARISON.md) will compare that implementation with the standalone Plinth control plane from direct experience.
+The repository includes a small Kubernetes operator with a CRD, event watch plus periodic resync, status conditions, and finalizers. [`COMPARISON.md`](COMPARISON.md) compares that implementation with the standalone Plinth control plane. The controller is intentionally small and hand-written, while following the reconcile/status/finalizer shape that kubebuilder scaffolding would generate.
 
 The comparison should cover ownership of desired state, deployment and failure behavior, Kubernetes coupling, operational surface, user experience, testing, and when a CRD is worth the cost.
 
 ## 10. GitOps and self-hosting
 
-The final phase adds Argo CD and the manifests-in-git model. Plinth should be able to deploy Tessera and Lattice through its own golden path.
+The repository includes Argo CD application manifests and Tessera/Lattice examples for the manifests-in-git model. The operator kustomization includes equivalent `PlinthService` objects, so Argo CD can apply the same golden path from Git. Applying them to a live cluster remains an environment-dependent verification step.
 
 This phase also proves the important boundary: the control plane may be unavailable while already-running workloads continue serving. The test cases include a bad image tag, a service that never becomes ready, a missing secret, and an aborted rollout.
 
@@ -167,19 +166,16 @@ Every phase ends with evidence, not just code:
 - a short explanation of the observed behavior;
 - updated documentation when the implementation teaches us something new.
 
-The first implementation target is the fake backend. No Kubernetes integration, UI, multi-cloud abstraction, service mesh, cost management, plugin system, or infrastructure provisioning should be started before the control loop is understood and demonstrated.
+The fake backend remains a permanent test backend. No multi-cloud, service mesh, cost management, plugin system, or infrastructure provisioning is included; the UI is limited to Swagger and the test playground required by `plinth.md`.
 
-## 12. Deferred decisions
+## 12. Decisions and remaining environment choices
 
-The following choices must be resolved by an ADR when their phase arrives:
+The core implementation choices are recorded in [`ADR/001-implementation-boundaries.md`](ADR/001-implementation-boundaries.md). The remaining choices are environment-specific:
 
-- how desired state and revisions are represented in Postgres;
-- how configuration and secret references become Kubernetes inputs;
 - which TLS and DNS components are available in the target cluster;
 - how metrics and structured logs are collected;
-- how error rate is measured for progressive rollout;
-- the exact CRD shape and operator ownership boundaries;
-- how Argo CD and the manifests-in-git workflow are integrated.
-- how the OpenAPI contract is generated and how Swagger UI and the playground are served.
+- how production error rate is measured for progressive rollout;
+- which identity provider supplies production team membership;
+- the exact Argo CD repository and destination configuration.
 
 These are implementation decisions, not permission to expand the product beyond `plinth.md`.

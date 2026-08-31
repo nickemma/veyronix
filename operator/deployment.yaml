@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: plinth-operator
+  namespace: plinth-system
+  labels:
+    app.kubernetes.io/name: plinth-operator
+    app.kubernetes.io/managed-by: plinth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: plinth-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: plinth-operator
+    spec:
+      serviceAccountName: plinth-operator
+      containers:
+        - name: operator
+          image: ghcr.io/nickemma/plinth-operator:dev
+          env:
+            # Required when a PlinthService enables progressive rollout.
+            - name: PLINTH_PROMETHEUS_URL
+              value: ""
+            - name: PLINTH_PROMETHEUS_QUERY
+              value: ""
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false

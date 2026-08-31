@@ -1,0 +1,16 @@
+apiVersion: plinth.dev/v1alpha1
+kind: PlinthService
+metadata:
+  name: tessera-gateway
+  namespace: plinth-default
+spec:
+  image: ghcr.io/nickemma/tessera:v0.4.1
+  port: 8080
+  replicas: 3
+  env:
+    LOG_LEVEL: info
+  secrets:
+    - DATABASE_URL
+  resources:
+    cpu: 500m
+    memory: 512Mi

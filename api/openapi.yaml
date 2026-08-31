@@ -5,9 +5,38 @@ info:
   description: |
     The lifecycle API used by the Plinth CLI and test playground.
     Swagger UI is served at /docs and this contract at /openapi.yaml.
+    X-Plinth-Actor and X-Plinth-Team identify the caller and team; both
+    default to local/default for local development.
 servers:
   - url: http://localhost:8080
 paths:
+  /api/v1/teams:
+    get:
+      summary: List configured teams
+      responses:
+        '200':
+          description: Teams
+    post:
+      summary: Register a team in the local policy store
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Team'
+      responses:
+        '200':
+          description: Registered team
+  /api/v1/audit:
+    get:
+      summary: Export audit records
+      parameters:
+        - {name: from, in: query, schema: {type: string, format: date-time}}
+        - {name: to, in: query, schema: {type: string, format: date-time}}
+        - {name: format, in: query, schema: {type: string, enum: [json, csv]}}
+      responses:
+        '200':
+          description: Audit records in JSON or CSV
   /api/v1/services:
     get:
       summary: List services
@@ -148,6 +177,12 @@ paths:
       responses:
         '200':
           description: Healthy
+  /readyz:
+    get:
+      summary: Readiness check
+      responses:
+        '200':
+          description: Ready
 components:
   parameters:
     Name:
@@ -173,6 +208,7 @@ components:
       required: [name, image, port, replicas, resources]
       properties:
         name: {type: string, example: tessera-gateway}
+        namespace: {type: string, description: Set by the selected team policy}
         image: {type: string, example: ghcr.io/nickemma/tessera:v0.4.1}
         port: {type: integer, example: 8080}
         replicas: {type: integer, example: 3}
@@ -184,10 +220,17 @@ components:
           properties:
             cpu: {type: string, example: 500m}
             memory: {type: string, example: 512Mi}
+        rollout:
+          type: object
+          properties:
+            enabled: {type: boolean}
+            steps: {type: array, items: {type: integer, minimum: 1, maximum: 100}}
+            max_error_rate: {type: number, minimum: 0, maximum: 1}
     Service:
       type: object
       properties:
         name: {type: string}
+        team: {type: string}
         desired_revision: {type: integer}
         active_revision: {type: integer}
         last_known_good: {type: integer}
@@ -217,3 +260,11 @@ components:
         time: {type: string, format: date-time}
         stream: {type: string}
         message: {type: string}
+    Team:
+      type: object
+      required: [name, namespace, service_quota]
+      properties:
+        name: {type: string, example: payments}
+        members: {type: array, items: {type: string}}
+        namespace: {type: string, example: plinth-payments}
+        service_quota: {type: integer, minimum: 1, example: 20}

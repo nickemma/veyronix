@@ -1,6 +1,6 @@
 # Plinth Runbook
 
-Plinth is still in planning. This runbook defines the operating behavior the implementation must support and the drills that prove it. It is intentionally useful from the beginning of Phase 1, when the backend is only an in-memory fake.
+This runbook defines the operating behavior of the current Plinth implementation and the drills that prove it. The fake backend is the dependency-free local path; the Kubernetes and Postgres paths use the same state and reconciliation boundaries.
 
 ## Operating principles
 
@@ -17,7 +17,7 @@ Plinth is still in planning. This runbook defines the operating behavior the imp
 1. Run the unit and reconciliation tests.
 2. Kill the reconciler during an action and restart it.
 3. Introduce manual drift and confirm it is corrected.
-4. Make the backend unavailable and confirm retry behavior is bounded and observable.
+4. Make the backend unavailable and confirm periodic retry behavior is observable and does not create duplicate revisions.
 5. Follow the relevant procedure below without relying on undocumented knowledge.
 
 ## API documentation and playground
@@ -25,7 +25,7 @@ Plinth is still in planning. This runbook defines the operating behavior the imp
 1. Start the local control plane against the fake backend.
 2. Open Swagger UI and confirm the API operations match the current OpenAPI contract.
 3. Open the playground and point it at the same local API.
-4. Run the complete scenario in [`walkthrough.md`](../walkthrough.md).
+4. Run the complete scenario in [`walkthrough.md`](walkthrough.md).
 5. Confirm that actions made in the playground produce the same desired state, status, events, and audit information as the equivalent CLI commands.
 
 The playground is for testing and explanation. Do not add dashboard features or make it a second source of operational truth.
@@ -78,7 +78,7 @@ This is the primary durability proof. A successful restart must not depend on an
 
 1. Confirm the API failure in the control-plane health output.
 2. Do not create a second desired revision merely because observation is delayed.
-3. Allow the reconciler to retry with bounded backoff.
+3. Allow the worker's periodic resync to retry without creating another desired revision.
 4. Restore API access and confirm the queue/resync causes convergence.
 5. Confirm already-running workloads continue serving throughout.
 

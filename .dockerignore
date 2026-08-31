@@ -1,0 +1,7 @@
+.git
+.agents
+.codex
+.plinth-state.json
+bin
+*.log
+.env
